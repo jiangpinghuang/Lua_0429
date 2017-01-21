@@ -2,13 +2,11 @@
 
 import os
 import sys
-import argparse
 import h5py
+import argparse
 import itertools
 import numpy as np
 from collections import defaultdict
-from keras.backend.tensorflow_backend import dtype
-from _ctypes import alignment
 
 class Indexer:
     def __init__(self, symbols=["<blank>", "<unk>", "<s>", "</s>"]):
@@ -19,7 +17,7 @@ class Indexer:
         self.EOS = symbols[3]
         self.d = {self.PAD: 1, self.UNK: 2, self.BOS: 3, self.EOS: 4}
         
-    def add_w(self, ws):
+    def add_word(self, ws):
         for w in ws:
             if w not in self.d:
                 self.d[w] = len(self.d) + 1
@@ -36,12 +34,12 @@ class Indexer:
         s = s.replace(self.EOS, "")
         return s
     
-    def write(self, outfile, chars=0):
+    def write(self, outfile, char=0):
         out = open(outfile, "w")
         items = [(v, k) for k, v in self.d.iteritems()]
         items.sort()
         for v, k in items:
-            if chars == 1:
+            if char == 1:
                 print >> out, k.encode('utf-8'), v
             else:
                 print >> out, k, v 
@@ -49,17 +47,17 @@ class Indexer:
         
     def prune_vocab(self, k):
         vocab_list = [(word, count) for word, count in self.vocab.iteritems()]
-        vocab_list.sort(key=lambda x: x[1], reverse=True)
+        vocab_list.sort(key = lambda x: x[1], reverse = True)
         k = min(k, len(vocab_list))
         self.pruned_vocab = {pair[0]:pair[1] for pair in vocab_list[:k]}
         for word in self.pruned_vocab:
             if word not in self.d:
                 self.d[word] = len(self.d) + 1
                 
-    def load_vocab(self, vocab_file, chars=0):
+    def load_vocab(self, vocab_file, char=0):
         self.d = {}
         for line in open(vocab_file, 'r'):
-            if chars == 1:
+            if char == 1:
                 v, k = line.decode("utf-8").strip().split()
             else:
                 v, k = line.strip().split()
@@ -70,117 +68,117 @@ def pad(ls, length, symbol):
         return ls[:length]
     return ls + [symbol] * (length - len(ls))
         
-def save_features(name, indexers, outputfile):
-    if len(indexers) > 0:
-        print("Number of additional features on {} side: {}".format(name, len(indexers)))
-    for i in range(len(indexers)):
-        indexers[i].write(outputfile + "." + name + "_feature_" + str(i + 1) + ".dict",)
-        print(" * {} feature {} of size: {}".format(name, i + 1, len(indexers[i].d)))
+def save_feature(name, indexer, outputfile):
+    if len(indexer) > 0:
+        print("Number of additional features on {} side: {}".format(name, len(indexer)))
+    for i in range(len(indexer)):
+        indexer[i].write(outputfile + "." + name + "_feature_" + str(i + 1) + ".dict", )
+        print(" * {} feature {} of size: {}".format(name, i + 1, len(indexer[i].d)))
             
-def load_features(name, indexers, outputfile):
-    for i in range(len(indexers)):
-        indexers[i].load_vocab(outputfile + "." + name + "_feature_" + str(i + 1) + ".dict",)
-        print(" * {} feature {} of size: {}".format(name, i + 1, len(indexers[i].d)))
+def load_feature(name, indexer, outputfile):
+    for i in range(len(indexer)):
+        indexer[i].load_vocab(outputfile + "." + name + "_feature_" + str(i + 1) + ".dict", )
+        print(" * {} feature {} of size: {}".format(name, i + 1, len(indexer[i].d)))
             
 def get_data(args):
     src_indexer = Indexer(["<blank>", "<unk>", "<s>", "</s>"])
-    src_feature_indexers = []
-    target_indexer = Indexer(["<blank>", "<unk>", "<s>", "</s>"])
+    src_feature_indexer = []
+    tar_indexer = Indexer(["<blank>", "<unk>", "<s>", "</s>"])
     char_indexer = Indexer(["<blank>", "<unk>", "{", "}"])
     char_indexer.add_w([src_indexer.PAD, src_indexer.UNK, src_indexer.BOS, src_indexer.EOS])
 
-    def init_feature_indexers(indexers, count):
+    def init_feature_indexer(indexer, count):
         for i in range(count):
-            indexers.append(Indexer(["<blank>", "<unk>", "<s>", "</s>"]))
+            indexer.append(Indexer(["<blank>", "<unk>", "<s>", "</s>"]))
                 
-    def load_sentence(sent, indexers):
+    def load_sentence(sent, indexer):
         sent_seq = sent.strip().split()
-        sent_words = ''
-        sent_features = []
+        sent_word = ''
+        sent_feature = []
             
         for entry in sent_seq:
             fields = entry.split('-|-')
             word = fields[0]
-            sent_words += (' ' if sent_words else '') + word
+            sent_word += (' ' if sent_word else '') + word
                 
             if len(fields) > 1:
                 count = len(fields) - 1
-                if len(sent_features) == 0:
-                    sent_features = [ [] for i in range(count) ]
-                if len(indexers) == 0:
-                    init_feature_indexers(indexers, count)
+                if len(sent_feature) == 0:
+                    sent_feature = [ [] for i in range(count) ]
+                if len(indexer) == 0:
+                    init_feature_indexers(indexer, count)
                 for i in range(1, len(fields)):
-                    sent_features[i - 1].append(fields[i])
-        return sent_words, sent_features
+                    sent_feature[i - 1].append(fields[i])
+        return sent_word, sent_feature
         
-    def add_features_vocab(orig_features, indexers):
-        if len(indexers) > 0:
+    def add_feature_vocab(feature, indexer):
+        if len(indexer) > 0:
             index = 0
-            for value in orig_features:
-                indexers[index].add_w(value)
+            for value in feature:
+                indexer[index].add_word(value)
                 index += 1
         
-    def make_vocab(srcfile, targetfile, seqlength, max_word_l=0, chars=0, train=1):
-        num_sents = 0
-        for _, (src_orig, targ_orig) in enumerate(itertools.izip(open(srcfile, 'r'), open(targetfile, 'r'))):
-            src_orig, src_orig_features = load_sentence(src_orig, src_feature_indexers)
-            if chars == 1:
-                src_orig = src_indexer.clean(src_orig.decode("utf-8").strip())
-                targ_orig = target_indexer.clean(targ_orig.decode("utf-8").strip())
+    def make_vocab(srcfile, tarfile, seq_len, max_word_len=0, char=0, train=1):
+        num_sent = 0
+        for _, (src, tar) in enumerate(itertools.izip(open(srcfile, 'r'), open(tarfile, 'r'))):
+            src, src_feature = load_sentence(src, src_feature_indexer)
+            if char == 1:
+                src = src_indexer.clean(src.decode("utf-8").strip())
+                tar = tar_indexer.clean(tar.decode("utf-8").strip())
             else:
-                src_orig = src_indexer.clean(src_orig.strip())
-                targ_orig = target_indexer.clean(targ_orig.strip())
-            targ = targ_orig.strip().split()
-            src = src_orig.strip().split()
-            if len(targ) > seqlength or len(src) > seqlength or len(targ) < 1 or len(src) < 1:
+                src = src_indexer.clean(src.strip())
+                tar = tar_indexer.clean(tar.strip())
+            tar = tar.strip().split()
+            src = src.strip().split()
+            if len(tar) > seq_len or len(src) > seq_len or len(tar) < 1 or len(src) < 1:
                 continue
-            num_sents += 1
+            num_sent += 1
             if train == 1:
-                for word in targ:
-                    if chars == 1:
-                        word = char_indexer.clean(word)
-                        if len(word) == 0:
+                for w in tar:
+                    if char == 1:
+                        w = char_indexer.clean(w)
+                        if len(w) == 0:
                             continue
-                        max_word_l = max(len(word) + 2, max_word_l)
-                        for char in list(word):
-                            char_indexer.vocab[char] += 1
-                    target_indexer.vocab[word] += 1
+                        max_word_len = max(len(w) + 2, max_word_len)
+                        for c in list(w):
+                            char_indexer.vocab[c] += 1
+                    tar_indexer.vocab[w] += 1
                     
-                add_features_vocab(src_orig_features, src_feature_indexers)
+                add_feature_vocab(src_feature, src_feature_indexer)
                     
-                for word in src:
-                    if chars == 1:
-                        word = char_indexer.clean(word)
-                        if len(word) == 0:
+                for w in src:
+                    if char == 1:
+                        w = char_indexer.clean(w)
+                        if len(w) == 0:
                             continue
-                        max_word_l = max(len(word) + 2, max_word_l)
-                        for char in list(word):
-                            char_indexer.vocab[char] += 1
-                    src_indexer.vocab[word] += 1
-        return max_word_l, num_sents
+                        max_word_len = max(len(w) + 2, max_word_len)
+                        for c in list(w):
+                            char_indexer.vocab[c] += 1
+                    src_indexer.vocab[w] += 1
+        return max_word_len, num_sent
         
-    def convert(srcfile, targetfile, alignfile, batchsize, seqlength, outfile, num_sents, max_word_l,
-                max_sent_l=0, chars=0, unkfilter=0, shuffle=0):
+    def convert(srcfile, tarfile, alifile, batchsize, seq_len, outfile, num_sent, max_word_len,
+                max_sent_len=0, char=0, unkfilter=0, shuffle=0):
             
-        def init_features_tensor(indexers):
-            return [np.zeros((num_sents, newseqlength), dtype=int) for i in range(len(indexers))]
+        def init_feature_tensor(indexer):
+            return [np.zeros((num_sent, new_seq_len), dtype=int) for i in range(len(indexer))]
             
-        def load_features(orig_features, indexers, seqlength):
-            if len(orig_features) == 0:
+        def load_feature(feature, indexer, seq_len):
+            if len(feature) == 0:
                 return None
                 
             features = []
-            for i in range(len(orig_features)):
-                features.append([[indexers[i].BOS]] + orig_features[i] + [[indexers[i].EOS]]) 
+            for i in range(len(feature)):
+                features.append([[indexer[i].BOS]] + feature[i] + [[indexer[i].EOS]]) 
                     
             for i in range(len(features)):
-                features[i] = pad(features[i], seqlength, [indexers[i].PAD])
+                features[i] = pad(features[i], seq_len, [indexer[i].PAD])
                 for j in range(len(features[i])):
-                    features[i][j] = indexers[i].convert_sequence(features[i][j])[0]
+                    features[i][j] = indexer[i].convert_sequence(features[i][j])[0]
                 features[i] = np.array(features[i], dtype=int)
             return features
             
-        newseqlength = seqlength + 2
+        new_seq_len = seq_len + 2
             
         alignfile_hdl = None
         alignments = None
@@ -199,7 +197,7 @@ def get_data(args):
             targets_char = np.zeros((num_sents, newseqlength, max_word_l), dtype=int)
         dropped = 0
         sent_id = 0
-        for _, (src_orig, targ_orig) in enumerate(itertools.izip(open(srcfile, 'r'), open(targetfile, 'r'))):
+        for _, (src_orig, targ_orig) in enumerate(itertools.izip(open(srcfile, 'r'), open(tarfile, 'r'))):
             src_orig, src_orig_features = load_sentence(src_orig, src_feature_indexers)
             if chars == 1:
                 src_orig = src_indexer.clean(src_orig.decode("utf-8").strip())
